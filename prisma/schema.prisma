@@ -1,0 +1,318 @@
+// ─────────────────────────────────────────────────────────
+// FlowMind AI — Prisma Schema v1.0
+// ─────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────── Enums ────────────────────────────
+
+enum WorkflowStatus {
+  draft
+  active
+  paused
+  error
+  archived
+}
+
+enum WorkflowRunStatus {
+  pending
+  running
+  success
+  failed
+  cancelled
+}
+
+enum AgentStatus {
+  active
+  inactive
+  training
+  error
+}
+
+enum AgentModel {
+  GPT4o
+  GPT4oMini
+  Claude35Sonnet
+  GeminiPro
+  Custom
+}
+
+enum SubscriptionPlan {
+  free
+  pro
+  enterprise
+}
+
+enum SubscriptionStatus {
+  active
+  past_due
+  cancelled
+  expired
+}
+
+enum TeamRole {
+  owner
+  admin
+  member
+  viewer
+}
+
+enum UsageType {
+  workflow_run
+  ai_token
+  api_call
+  storage
+}
+
+// ──────────────────────────── Models ────────────────────────────
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  name           String
+  avatarUrl      String?
+  passwordHash   String
+  isActive       Boolean   @default(true)
+  emailVerified  Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  workflows       Workflow[]
+  agents          Agent[]
+  apiKeys         APIKey[]
+  teamMembers     TeamMember[]
+  workflowRuns    WorkflowRun[]
+  subscriptions   Subscription[]
+  usageLogs       UsageLog[]
+  sessions        Session[]
+  templates       WorkflowTemplate[]
+
+  @@index([email])
+  @@index([isActive, createdAt])
+  @@map("users")
+}
+
+model Team {
+  id          String    @id @default(cuid())
+  name        String
+  slug        String    @unique
+  description String?
+  avatarUrl   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  members     TeamMember[]
+  workflows   Workflow[]
+  agents      Agent[]
+  subscriptions Subscription[]
+  usageLogs   UsageLog[]
+
+  @@index([slug])
+  @@index([createdAt])
+  @@map("teams")
+}
+
+model TeamMember {
+  id        String    @id @default(cuid())
+  role      TeamRole  @default(member)
+  joinedAt  DateTime  @default(now())
+
+  userId    String
+  teamId    String
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team      Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, teamId])
+  @@index([teamId, role])
+  @@index([userId])
+  @@map("team_members")
+}
+
+model Workflow {
+  id          String         @id @default(cuid())
+  name        String
+  description String?
+  steps       Json?                       // Array of WorkflowBlock
+  status      WorkflowStatus @default(draft)
+  trigger     String?                     // "event" | "schedule" | "webhook"
+  runsCount   Int            @default(0)
+  lastRunAt   DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  userId      String?
+  teamId      String?
+
+  user        User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  team        Team?          @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  runs        WorkflowRun[]
+
+  @@index([userId, status, updatedAt])
+  @@index([teamId, status, updatedAt])
+  @@index([status, lastRunAt])
+  @@index([createdAt])
+  @@map("workflows")
+}
+
+model WorkflowRun {
+  id           String             @id @default(cuid())
+  status       WorkflowRunStatus  @default(pending)
+  trigger      String?                        // "manual" | "auto" | "schedule"
+  input        Json?
+  output       Json?
+  errorMessage String?
+  startedAt    DateTime           @default(now())
+  completedAt  DateTime?
+
+  workflowId   String
+  userId       String?
+
+  workflow     Workflow           @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  user         User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+  usageLogs    UsageLog[]
+
+  @@index([workflowId, status, startedAt])
+  @@index([workflowId, startedAt])
+  @@index([userId, startedAt])
+  @@index([status, startedAt])
+  @@map("workflow_runs")
+}
+
+model Agent {
+  id              String      @id @default(cuid())
+  name            String
+  description     String?
+  model           AgentModel
+  status          AgentStatus @default(inactive)
+  capabilities    String[]
+  config          Json?                   // Model params: temperature, maxTokens, systemPrompt
+  accuracy        Float       @default(0)
+  tasksCompleted  Int         @default(0)
+  lastUsedAt      DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  userId          String?
+  teamId          String?
+
+  user            User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  team            Team?       @relation(fields: [teamId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status])
+  @@index([teamId, status])
+  @@index([status, lastUsedAt])
+  @@map("agents")
+}
+
+model Subscription {
+  id                 String             @id @default(cuid())
+  plan               SubscriptionPlan   @default(free)
+  status             SubscriptionStatus @default(active)
+  currentPeriodStart DateTime           @default(now())
+  currentPeriodEnd   DateTime?
+  trialEndsAt        DateTime?
+  canceledAt         DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  stripeCustomerId   String?
+  stripeSubscriptionId String?
+
+  userId             String?
+  teamId             String?
+
+  user               User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team               Team?              @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([teamId, status])
+  @@index([status, currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+model UsageLog {
+  id         String    @id @default(cuid())
+  usageType  UsageType
+  quantity   Int       @default(0)              // e.g. token count, run count
+  cost       Decimal   @default(0) @db.Decimal(12, 6)
+  metadata   Json?                              // Extra context: model, workflow name, etc.
+  recordedAt DateTime  @default(now())
+
+  userId     String?
+  teamId     String?
+  runId      String?
+
+  user       User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  team       Team?     @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  run        WorkflowRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([userId, usageType, recordedAt])
+  @@index([teamId, usageType, recordedAt])
+  @@index([recordedAt])
+  @@index([usageType, recordedAt])
+  @@map("usage_logs")
+}
+
+model Session {
+  id           String    @id @default(cuid())
+  refreshToken String    @unique
+  userId       String
+  userAgent    String?
+  ip           String?
+  expiresAt    DateTime
+  createdAt    DateTime  @default(now())
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([refreshToken])
+  @@map("sessions")
+}
+
+model WorkflowTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  category    String   @default("general")
+  icon        String   @default("file-text")
+  steps       Json?                // Array of WorkflowBlock
+  trigger     String?
+  isBuiltIn   Boolean  @default(false)
+  usageCount  Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy   String?
+  creator     User?    @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([category, usageCount])
+  @@index([isBuiltIn, usageCount])
+  @@index([createdAt])
+  @@map("workflow_templates")
+}
+
+model APIKey {
+  id          String    @id @default(cuid())
+  name        String
+  keyPrefix   String    @unique                 // First 8 chars for identification
+  keyHash     String    @unique                 // bcrypt hash of the full key
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  userId      String
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive])
+  @@index([keyHash])
+  @@map("api_keys")
+}

@@ -1,0 +1,20 @@
+import { NextRequest, NextResponse } from "next/server";
+import { verifySession } from "@/lib/auth/session";
+import * as executionService from "@/lib/execution/service";
+import { handleApiError } from "@/lib/api/error-handler";
+
+type Params = Promise<{ id: string }>;
+
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Params },
+) {
+  try {
+    const { id } = await params;
+    const payload = await verifySession();
+    const run = await executionService.getRunDetail(id, payload.userId);
+    return NextResponse.json({ run }, { status: 200 });
+  } catch (error) {
+    return handleApiError(error);
+  }
+}
